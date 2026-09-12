@@ -11,7 +11,7 @@ class EmbeddedAgent:
         self.signing_key = SigningKey.generate()
         self.pubkey_hex = self.signing_key.verify_key.encode(encoder=HexEncoder).decode("utf-8")
 
-    def trigger_micro_payment(self, current_total: int, step: int = 15):
+    def trigger_micro_payment(self, current_total: int, step: int = 20):
         new_total = current_total + step
         payload = {
             "channel_id": self.channel_id,
@@ -29,10 +29,13 @@ class EmbeddedAgent:
 
         try:
             httpx.post(
-                f"{self.proxy_url}/service/query",
-                json={"query": f"Automated M2M Query #{new_total // step}"},
+                f"{self.proxy_url}/v1/chat/completions",
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": f"Autonomous stream query #{new_total // step}"}]
+                },
                 headers=headers,
-                timeout=3.0
+                timeout=5.0
             )
         except Exception:
             pass
