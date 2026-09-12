@@ -192,15 +192,18 @@ if data:
                 try:
                     res = httpx.get(f"{PROXY_URL}/channel/{channel_id}/settle", timeout=15.0)
                     if res.status_code == 200:
-                        tx_hash = res.json().get("tx_hash", "")
-                        st.session_state.last_settle_tx = tx_hash
-                        st.success("Settled on Solana!")
-                except Exception as e:
-                    st.error(f"Settlement request failed")
+                        data = res.json()
+                        st.session_state.last_settle_tx = data.get("tx_hash")
+                        st.success("Settled on Solana Devnet!")
+                        st.rerun() # Immediately reload to paint the link
+                    else:
+                        st.error(f"Error {res.status_code}: {res.text}")
+                except Exception as err:
+                    st.error(f"Settlement failed: {err}")
 
         tx_display = st.session_state.get("last_tx", None)
         explorer_link = f"https://explorer.solana.com/tx/{tx_display}?cluster=devnet" if tx_display else None
-        
+
         pda_card_html = (
             '<div class="nb-card nb-green" style="word-break: break-all;">'
             '<span class="nb-tag">AGENT PUBKEY</span>'
