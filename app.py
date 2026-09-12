@@ -6,7 +6,10 @@ from embedded_agent import EmbeddedAgent
 
 st.set_page_config(page_title="SYNAPSEPAY // AGENT PROTOCOL", layout="wide")
 
-# Neubrutalism CSS adapted from template
+# Cloud or Local Backend Configuration
+PROXY_URL = "https://synapsepay-proxy.onrender.com"
+
+# Neubrutalism CSS
 NEUBRUTALISM_CSS = """
 <style>
 /* Global Canvas */
@@ -16,13 +19,13 @@ NEUBRUTALISM_CSS = """
     color: #000000;
 }
 
-/* Sidebar Styling */
+/* Sidebar */
 [data-testid="stSidebar"] {
     background-color: #FFFDF0 !important;
     border-right: 4px solid #000000 !important;
 }
 
-/* Standard Streamlit Buttons */
+/* Standard Buttons */
 .stButton > button {
     background-color: #FFE600 !important;
     color: #000000 !important;
@@ -110,15 +113,23 @@ poll_freq = st.sidebar.slider("POLL INTERVAL (SEC)", 1, 5, 2)
 refresh_now = st.sidebar.button("FORCE REFRESH")
 
 st.sidebar.markdown("---")
+auto_stream = st.sidebar.checkbox("⚡ AUTO-STREAM MICROPAYMENTS", value=True)
+
+st.sidebar.markdown("---")
 st.sidebar.markdown("""
 **NETWORK:** SOLANA DEVNET  
 **VM:** ANCHOR ESCROW / ED25519  
 **AUTH:** ZERO-GAS OFF-CHAIN VOUCHER
 """)
 
-# Sidebar Demo Control
-st.sidebar.markdown("---")
-auto_stream = st.sidebar.checkbox("⚡ AUTO-STREAM MICROPAYMENTS", value=True)
+def fetch_channel_data(c_id):
+    try:
+        res = httpx.get(f"{PROXY_URL}/channel/{c_id}/latest", timeout=3.0)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        return None
+    return None
 
 # Initialize persistent session agent
 if "agent_sim" not in st.session_state:
@@ -133,19 +144,6 @@ if auto_stream:
     st.session_state.agent_sim.trigger_micro_payment(current_total=current_amt, step=20)
     data = fetch_channel_data(channel_id)
 
-PROXY_URL = "https://synapsepay-proxy.onrender.com"
-
-def fetch_channel_data(c_id):
-    try:
-        res = httpx.get(f"{PROXY_URL}/channel/{c_id}/latest", timeout=1.5)
-        if res.status_code == 200:
-            return res.json()
-    except Exception:
-        return None
-    return None
-
-data = fetch_channel_data(channel_id)
-
 # Top Stat Row
 c1, c2, c3 = st.columns(3)
 
@@ -156,92 +154,77 @@ if data:
     voucher = data.get("latest_voucher", {})
 
     with c1:
-        st.markdown(f"""
-        <div class="nb-card nb-cyan">
-            <span class="nb-tag">Channel Status</span>
-            <div class="nb-metric-num">ACTIVE #{channel_id}</div>
-            <div>STATE: ESCROW LOCKED</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="nb-card nb-cyan">
+<span class="nb-tag">Channel Status</span>
+<div class="nb-metric-num">ACTIVE #{channel_id}</div>
+<div>STATE: ESCROW LOCKED</div>
+</div>""", unsafe_allow_html=True)
 
     with c2:
-        st.markdown(f"""
-        <div class="nb-card nb-pink">
-            <span class="nb-tag">Cumulative Spent</span>
-            <div class="nb-metric-num">{amt:,} μ-UNITS</div>
-            <div>MONOTONIC STREAM VERIFIED</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="nb-card nb-pink">
+<span class="nb-tag">Cumulative Spent</span>
+<div class="nb-metric-num">{amt:,} μ-UNITS</div>
+<div>MONOTONIC STREAM VERIFIED</div>
+</div>""", unsafe_allow_html=True)
 
     with c3:
-        st.markdown(f"""
-        <div class="nb-card nb-yellow">
-            <span class="nb-tag">Efficiency</span>
-            <div class="nb-metric-num">99.98%</div>
-            <div>TX OVERHEAD ELIMINATED</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("""<div class="nb-card nb-yellow">
+<span class="nb-tag">Efficiency</span>
+<div class="nb-metric-num">99.98%</div>
+<div>TX OVERHEAD ELIMINATED</div>
+</div>""", unsafe_allow_html=True)
 
-    # Details & Security Section
+    # Details Section
     col_left, col_right = st.columns([1.2, 1])
 
     with col_left:
         st.markdown("### 02 // VALIDATED ED25519 VOUCHER")
-        st.markdown(f"""
-        <div class="nb-card nb-white" style="font-family: monospace;">
-            <pre style="margin:0; font-weight:700;">{json.dumps(voucher, indent=2)}</pre>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="nb-card nb-white" style="font-family: monospace;">
+<pre style="margin:0; font-weight:700;">{json.dumps(voucher, indent=2)}</pre>
+</div>""", unsafe_allow_html=True)
 
     with col_right:
         st.markdown("### 03 // ON-CHAIN SETTLEMENT PDA")
-        st.markdown(f"""
-        <div class="nb-card nb-green" style="word-break: break-all;">
-            <span class="nb-tag">AGENT PUBKEY</span>
-            <div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{agent_key}</div>
-            <span class="nb-tag">SIGNATURE ATTESTATION</span>
-            <div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{sig[:32]}...</div>
-            <span class="nb-tag">SOLANA SETTLEMENT</span>
-            <div style="font-size: 0.85rem;">PREPARING ATOMIC INSTRUCTION CLOSE</div>
-        </div>
-        """, unsafe_allow_html=True)
+        pda_card_html = (
+            '<div class="nb-card nb-green" style="word-break: break-all;">'
+            '<span class="nb-tag">AGENT PUBKEY</span>'
+            f'<div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{agent_key}</div>'
+            '<span class="nb-tag">SIGNATURE ATTESTATION</span>'
+            f'<div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{sig[:32]}...</div>'
+            '<span class="nb-tag">SOLANA SETTLEMENT</span>'
+            '<div style="font-size: 0.85rem;">PREPARING ATOMIC INSTRUCTION CLOSE</div>'
+            '</div>'
+        )
+        st.markdown(pda_card_html, unsafe_allow_html=True)
 
 else:
     with c1:
-        st.markdown(f"""
-        <div class="nb-card nb-pink">
-            <span class="nb-tag">Channel Status</span>
-            <div class="nb-metric-num">IDLE #{channel_id}</div>
-            <div>WAITING FOR AGENT CALLS</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="nb-card nb-pink">
+<span class="nb-tag">Channel Status</span>
+<div class="nb-metric-num">IDLE #{channel_id}</div>
+<div>WAITING FOR AGENT CALLS</div>
+</div>""", unsafe_allow_html=True)
 
     with c2:
-        st.markdown("""
-        <div class="nb-card nb-yellow">
-            <span class="nb-tag">Cumulative Spent</span>
-            <div class="nb-metric-num">0 μ-UNITS</div>
-            <div>NO RECENT INVOCATIONS</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("""<div class="nb-card nb-yellow">
+<span class="nb-tag">Cumulative Spent</span>
+<div class="nb-metric-num">0 μ-UNITS</div>
+<div>NO RECENT INVOCATIONS</div>
+</div>""", unsafe_allow_html=True)
 
     with c3:
-        st.markdown("""
-        <div class="nb-card nb-cyan">
-            <span class="nb-tag">Proxy Health</span>
-            <div class="nb-metric-num">LISTENING</div>
-            <div>PORT: 127.0.0.1:8000</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("""<div class="nb-card nb-cyan">
+<span class="nb-tag">Proxy Health</span>
+<div class="nb-metric-num">CONNECTING</div>
+<div>TARGET: CLOUD PROXY</div>
+</div>""", unsafe_allow_html=True)
 
-    st.markdown("""
-    <div class="nb-card nb-white">
-        <span class="nb-tag">QUICKSTART INSTRUCTION</span>
-        <div style="margin-top: 0.5rem;">
-            Run <code>py agent_client.py</code> in your terminal to begin sending signed micropayment vouchers to this channel.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("""<div class="nb-card nb-white">
+<span class="nb-tag">SYSTEM STATUS</span>
+<div style="margin-top: 0.5rem;">
+Waiting for response from Render backend. If the free tier instance is sleeping, it will wake up in ~30 seconds.
+</div>
+</div>""", unsafe_allow_html=True)
 
 time.sleep(poll_freq)
 st.rerun()
