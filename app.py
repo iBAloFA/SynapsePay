@@ -185,6 +185,22 @@ if data:
 
     with col_right:
         st.markdown("### 03 // ON-CHAIN SETTLEMENT PDA")
+
+        # Check if settled or add manual settle trigger
+        if st.button("⚡ EXECUTE DEVNET SETTLEMENT NOW"):
+            with st.spinner("Submitting atomic close transaction to Solana Devnet..."):
+                try:
+                    res = httpx.get(f"{PROXY_URL}/channel/{channel_id}/settle", timeout=15.0)
+                    if res.status_code == 200:
+                        tx_hash = res.json().get("tx_hash", "")
+                        st.session_state.last_settle_tx = tx_hash
+                        st.success("Settled on Solana!")
+                except Exception as e:
+                    st.error(f"Settlement request failed")
+
+        tx_display = st.session_state.get("last_tx", None)
+        explorer_link = f"https://explorer.solana.com/tx/{tx_display}?cluster=devnet" if tx_display else None
+        
         pda_card_html = (
             '<div class="nb-card nb-green" style="word-break: break-all;">'
             '<span class="nb-tag">AGENT PUBKEY</span>'
