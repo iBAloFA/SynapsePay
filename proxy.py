@@ -157,7 +157,7 @@ def trigger_settle_endpoint(channel_id: int):
         settle_lamports = max(int(cumulative_units), 1000)
 
         # 1. Fetch latest blockhash via direct JSON-RPC
-        blockhash_info = solana_rpc_call("getLatestBlockhash", [{"commitment": "confirmed"}])
+        blockhash_info = solana_rpc_call("getLatestBlockhash", [{"commitment": "finalized"}])
         recent_blockhash = Hash.from_string(blockhash_info["value"]["blockhash"])
 
         # 2. Build on-chain transfer instruction
@@ -176,7 +176,7 @@ def trigger_settle_endpoint(channel_id: int):
         # 4. Serialize and send base64 transaction to Devnet
         tx_bytes = bytes(tx)
         tx_b64 = base64.b64encode(tx_bytes).decode("utf-8")
-        tx_hash = solana_rpc_call("sendTransaction", [tx_b64, {"encoding": "base64"}])
+        tx_hash = solana_rpc_call("sendTransaction", [tx_b64, {"encoding": "base64", "skipPreflight": True, "preflightCommitment": "finalized"}])
 
         state["settled"] = True
         state["settled_tx"] = tx_hash
