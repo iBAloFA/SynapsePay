@@ -7,6 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="SynapsePay Proxy Gateway")
 
+@app.get("/")
+def root():
+    return {"status": "online", "service": "SynapsePay State Channel Proxy"}
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "healthy"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -65,10 +73,20 @@ async def proxy_completion(request: Request, authorization: str = Header(...)):
     }
 
 @app.get("/channel/{channel_id}/latest")
-def get_channel_voucher(channel_id: int):
-    if channel_id not in CHANNEL_STATE:
-        raise HTTPException(status_code=404, detail="Channel not active.")
-    return CHANNEL_STATE[channel_id]
+def get_latest_channel_state(channel_id: int):
+    if channel_id not in channel_states:
+        return {
+            "channel_id": channel_id,
+            "highest_amount": 0,
+            "agent": "Awaiting first voucher",
+            "signature_hex": "0" * 64,
+            "latest_voucher": {
+                "channel_id": channel_id,
+                "cumulative_amount": 0,
+                "status": "initialized"
+            }
+        }
+    return channel_states[channel_id]
 
 if __name__ == "__main__":
     import os
