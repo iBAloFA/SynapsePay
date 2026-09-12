@@ -35,3 +35,31 @@ SynapsePay separates continuous API authorization from final financial settlemen
         │  (4) Submits Highest Counter-Signed Voucher
         ▼
 [ Solana Anchor Program ] ── Atomic Close: Transfers Provider Pay + Refunds Agent
+
+---
+
+## SETUP STEPS
+
+git clone [https://github.com/iBAloFA/SynapsePay.git](https://github.com/iBAloFA/SynapsePay.git)
+cd SynapsePay
+
+# Create and activate virtual environment
+python -m venv venv
+
+# Windows (PowerShell):
+.\venv\Scripts\Activate.ps1
+
+# macOS/Linux:
+source venv/bin/activate
+
+pip install -r requirements.txt
+
+python proxy.py
+
+streamlit run app.py
+
+python agent_client.py
+
+python settle.py
+
+---
