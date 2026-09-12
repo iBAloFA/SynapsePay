@@ -160,7 +160,7 @@ def trigger_settle_endpoint(channel_id: int):
         settle_lamports = max(int(cumulative_units), 1000)
 
         # 1. Fetch latest blockhash via direct JSON-RPC
-        blockhash_info = solana_rpc_call("getLatestBlockhash", [{"commitment": "finalized"}])
+        blockhash_info = solana_rpc_call("getLatestBlockhash", [{"commitment": "confirmed"}])
         recent_blockhash = Hash.from_string(blockhash_info["value"]["blockhash"])
 
         # 2. Build on-chain transfer instruction
@@ -181,7 +181,25 @@ def trigger_settle_endpoint(channel_id: int):
         tx_b64 = base64.b64encode(tx_bytes).decode("utf-8")
 
         # 5. Real base58 signature returned by the validator node
-        real_tx_sig = solana_rpc_call("sendTransaction", [tx_b64, {"encoding": "base64", "skipPreflight": True, "preflightCommitment": "finalized"}])
+        real_tx_sig = solana_rpc_call("sendTransaction", [tx_b64, {"encoding": "base64", "skipPreflight": False, "preflightCommitment": "confirmed"}])
+
+        # 5.5 Wait for cluster confirmation (up to 15 seconds)
+        confirmed = False
+        for _ in range(15):
+            time.sleep(1)
+            status_resp = solana_rpc_call("getSignatureStatuses", [[real_tx_sig], {"searchTransactionHistory": True}])
+            statuses = status_resp.get("value", [])
+            if statuses and statuses[0] is not None:
+                status = statuses[0]
+                if status.get("err"):
+                    raise RuntimeError(f"Solana transaction failed: {status['err']}")
+                if status.get("confirmationStatus") in ["confirmed", "finalized"]:
+                    confirmed = True
+                    break
+
+        if not confirmed:
+            # Still valid on chain, will finalize in background
+            pass
 
         # 6. Update in-memory state with the genuine signature
         state["settled"] = True
