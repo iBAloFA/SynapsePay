@@ -18,13 +18,11 @@ NEUBRUTALISM_CSS = """
     font-family: 'Courier New', Courier, monospace, sans-serif;
     color: #000000;
 }
-
 /* Sidebar */
 [data-testid="stSidebar"] {
     background-color: #FFFDF0 !important;
     border-right: 4px solid #000000 !important;
 }
-
 /* Standard Buttons */
 .stButton > button {
     background-color: #FFE600 !important;
@@ -39,7 +37,7 @@ NEUBRUTALISM_CSS = """
     transition: transform 0.1s ease, box-shadow 0.1s ease !important;
 }
 .stButton > button:hover {
-    transform: translate(-2px, -2px) !important;
+    transform: translate(-2px, 2px) !important;
     box-shadow: 6px 6px 0px #000000 !important;
     background-color: #FF5252 !important;
     color: #FFFFFF !important;
@@ -48,7 +46,6 @@ NEUBRUTALISM_CSS = """
     transform: translate(2px, 2px) !important;
     box-shadow: 2px 2px 0px #000000 !important;
 }
-
 /* Text & Number Inputs */
 .stTextInput input, .stNumberInput input {
     background-color: #FFFFFF !important;
@@ -58,7 +55,6 @@ NEUBRUTALISM_CSS = """
     font-weight: 700 !important;
     box-shadow: 4px 4px 0px #000000 !important;
 }
-
 /* Neubrutalist Card Classes */
 .nb-card {
     border: 3px solid #000000;
@@ -72,7 +68,6 @@ NEUBRUTALISM_CSS = """
 .nb-yellow { background-color: #FFD670; }
 .nb-green { background-color: #79FF85; }
 .nb-white { background-color: #FFFFFF; }
-
 .nb-tag {
     display: inline-block;
     background: #000000;
@@ -83,7 +78,6 @@ NEUBRUTALISM_CSS = """
     margin-bottom: 8px;
     text-transform: uppercase;
 }
-
 .nb-metric-num {
     font-size: 2.1rem;
     font-weight: 900;
@@ -111,25 +105,25 @@ st.sidebar.markdown("### 01 // CONTROL PANEL")
 channel_id = st.sidebar.number_input("TARGET CHANNEL ID", min_value=1, value=101, step=1)
 poll_freq = st.sidebar.slider("POLL INTERVAL (SEC)", 1, 5, 2)
 refresh_now = st.sidebar.button("FORCE REFRESH")
-
 st.sidebar.markdown("---")
 auto_stream = st.sidebar.checkbox("⚡ AUTO-STREAM MICROPAYMENTS", value=True)
-
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
 **NETWORK:** SOLANA DEVNET  
 **VM:** ANCHOR ESCROW / ED25519  
-**AUTH:** ZERO-GAS OFF-CHAIN VOUCHER
+**AUTH:** ZERO-GAS OFF-CHAIN VOUCHER  
 """)
 
-def fetch_channel_data(c_id):
+
+def fetch_channel_data(c_id: int):
     try:
-        res = httpx.get(f"{PROXY_URL}/channel/{c_id}/latest", timeout=3.0)
+        res = httpx.get(f"{PROXY_URL}/channel/{c_id}/latest", timeout=5.0)
         if res.status_code == 200:
             return res.json()
     except Exception:
         return None
     return None
+
 
 # Initialize persistent session agent
 if "agent_sim" not in st.session_state:
@@ -139,8 +133,12 @@ if "agent_sim" not in st.session_state:
 data = fetch_channel_data(channel_id)
 current_amt = data.get("highest_amount", 0) if data else 0
 
-# If auto-stream is enabled, generate and post a signed voucher automatically
-if auto_stream:
+# Check settled state from proxy or active session
+is_settled = data.get("settled", False) if data else False
+saved_tx = data.get("settled_tx") or st.session_state.get("last_tx")
+
+# If auto-stream is enabled and channel not yet settled, send continuous vouchers
+if auto_stream and not is_settled:
     st.session_state.agent_sim.trigger_micro_payment(current_total=current_amt, step=20)
     data = fetch_channel_data(channel_id)
 
@@ -153,56 +151,76 @@ if data:
     sig = data.get("signature_hex", "")
     voucher = data.get("latest_voucher", {})
 
+    status_badge = "STATE: SETTLED ON-CHAIN" if is_settled else "STATE: ESCROW LOCKED"
+
     with c1:
-        st.markdown(f"""<div class="nb-card nb-cyan">
-<span class="nb-tag">Channel Status</span>
-<div class="nb-metric-num">ACTIVE #{channel_id}</div>
-<div>STATE: ESCROW LOCKED</div>
-</div>""", unsafe_allow_html=True)
-
+        st.markdown(f"""
+        <div class="nb-card nb-cyan">
+            <span class="nb-tag">Channel Status</span>
+            <div class="nb-metric-num">ACTIVE #{channel_id}</div>
+            <div>{status_badge}</div>
+        </div>
+        """, unsafe_allow_html=True)
     with c2:
-        st.markdown(f"""<div class="nb-card nb-pink">
-<span class="nb-tag">Cumulative Spent</span>
-<div class="nb-metric-num">{amt:,} μ-UNITS</div>
-<div>MONOTONIC STREAM VERIFIED</div>
-</div>""", unsafe_allow_html=True)
-
+        st.markdown(f"""
+        <div class="nb-card nb-pink">
+            <span class="nb-tag">Cumulative Spent</span>
+            <div class="nb-metric-num">{amt:,} μ-UNITS</div>
+            <div>MONOTONIC STREAM VERIFIED</div>
+        </div>
+        """, unsafe_allow_html=True)
     with c3:
-        st.markdown("""<div class="nb-card nb-yellow">
-<span class="nb-tag">Efficiency</span>
-<div class="nb-metric-num">99.98%</div>
-<div>TX OVERHEAD ELIMINATED</div>
-</div>""", unsafe_allow_html=True)
+        st.markdown("""
+        <div class="nb-card nb-yellow">
+            <span class="nb-tag">Efficiency</span>
+            <div class="nb-metric-num">99.98%</div>
+            <div>TX OVERHEAD ELIMINATED</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Details Section
     col_left, col_right = st.columns([1.2, 1])
 
     with col_left:
         st.markdown("### 02 // VALIDATED ED25519 VOUCHER")
-        st.markdown(f"""<div class="nb-card nb-white" style="font-family: monospace;">
-<pre style="margin:0; font-weight:700;">{json.dumps(voucher, indent=2)}</pre>
-</div>""", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="nb-card nb-white" style="font-family: monospace;">
+            <pre style="margin:0; font-weight:700;">{json.dumps(voucher, indent=2)}</pre>
+        </div>
+        """, unsafe_allow_html=True)
 
     with col_right:
         st.markdown("### 03 // ON-CHAIN SETTLEMENT PDA")
 
-        # Check if settled or add manual settle trigger
+        # Settlement Execution Action
         if st.button("⚡ EXECUTE DEVNET SETTLEMENT NOW"):
             with st.spinner("Submitting atomic close transaction to Solana Devnet..."):
                 try:
-                    res = httpx.get(f"{PROXY_URL}/channel/{channel_id}/settle", timeout=15.0)
+                    res = httpx.post(f"{PROXY_URL}/channel/{channel_id}/settle", timeout=20.0)
                     if res.status_code == 200:
-                        data = res.json()
-                        st.session_state.last_settle_tx = data.get("tx_hash")
+                        settle_res = res.json()
+                        tx_hash = settle_res.get("tx_hash")
+                        st.session_state.last_tx = tx_hash
                         st.success("Settled on Solana Devnet!")
-                        st.rerun() # Immediately reload to paint the link
+                        st.rerun()
                     else:
                         st.error(f"Error {res.status_code}: {res.text}")
                 except Exception as err:
                     st.error(f"Settlement failed: {err}")
 
-        tx_display = st.session_state.get("last_tx", None)
-        explorer_link = f"https://explorer.solana.com/tx/{tx_display}?cluster=devnet" if tx_display else None
+        # Derive live Explorer link
+        tx_display = saved_tx
+        explorer_link = (
+            f"https://explorer.solana.com/tx/{tx_display}?cluster=devnet"
+            if tx_display
+            else None
+        )
+
+        settle_status_html = (
+            f'<a href="{explorer_link}" target="_blank" style="color:#000; text-decoration: underline; font-weight: 900;">VIEW CONFIRMED TX ON EXPLORER ↗</a>'
+            if explorer_link
+            else 'PREPARING ATOMIC INSTRUCTION CLOSE'
+        )
 
         pda_card_html = (
             '<div class="nb-card nb-green" style="word-break: break-all;">'
@@ -211,39 +229,47 @@ if data:
             '<span class="nb-tag">SIGNATURE ATTESTATION</span>'
             f'<div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{sig[:32]}...</div>'
             '<span class="nb-tag">SOLANA SETTLEMENT</span>'
-            '<div style="font-size: 0.85rem;">PREPARING ATOMIC INSTRUCTION CLOSE</div>'
+            f'<div style="font-size: 0.85rem; font-weight: 900;">{settle_status_html}</div>'
             '</div>'
         )
         st.markdown(pda_card_html, unsafe_allow_html=True)
 
 else:
     with c1:
-        st.markdown(f"""<div class="nb-card nb-pink">
-<span class="nb-tag">Channel Status</span>
-<div class="nb-metric-num">IDLE #{channel_id}</div>
-<div>WAITING FOR AGENT CALLS</div>
-</div>""", unsafe_allow_html=True)
-
+        st.markdown(f"""
+        <div class="nb-card nb-pink">
+            <span class="nb-tag">Channel Status</span>
+            <div class="nb-metric-num">IDLE #{channel_id}</div>
+            <div>WAITING FOR AGENT CALLS</div>
+        </div>
+        """, unsafe_allow_html=True)
     with c2:
-        st.markdown("""<div class="nb-card nb-yellow">
-<span class="nb-tag">Cumulative Spent</span>
-<div class="nb-metric-num">0 μ-UNITS</div>
-<div>NO RECENT INVOCATIONS</div>
-</div>""", unsafe_allow_html=True)
-
+        st.markdown("""
+        <div class="nb-card nb-yellow">
+            <span class="nb-tag">Cumulative Spent</span>
+            <div class="nb-metric-num">0 μ-UNITS</div>
+            <div>NO RECENT INVOCATIONS</div>
+        </div>
+        """, unsafe_allow_html=True)
     with c3:
-        st.markdown("""<div class="nb-card nb-cyan">
-<span class="nb-tag">Proxy Health</span>
-<div class="nb-metric-num">CONNECTING</div>
-<div>TARGET: CLOUD PROXY</div>
-</div>""", unsafe_allow_html=True)
+        st.markdown("""
+        <div class="nb-card nb-cyan">
+            <span class="nb-tag">Proxy Health</span>
+            <div class="nb-metric-num">CONNECTING</div>
+            <div>TARGET: CLOUD PROXY</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.markdown("""<div class="nb-card nb-white">
-<span class="nb-tag">SYSTEM STATUS</span>
-<div style="margin-top: 0.5rem;">
-Waiting for response from Render backend. If the free tier instance is sleeping, it will wake up in ~30 seconds.
-</div>
-</div>""", unsafe_allow_html=True)
+    st.markdown("""
+    <div class="nb-card nb-white">
+        <span class="nb-tag">SYSTEM STATUS</span>
+        <div style="margin-top: 0.5rem;">
+            Waiting for response from Render backend. If the free tier instance is sleeping, it will wake up in ~30 seconds.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-time.sleep(poll_freq)
-st.rerun()
+# Poll Interval Loop
+if auto_stream and not is_settled:
+    time.sleep(poll_freq)
+    st.rerun()

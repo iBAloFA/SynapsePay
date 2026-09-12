@@ -133,6 +133,8 @@ def get_latest_channel_state(channel_id: int):
             "highest_amount": 0,
             "agent": "Awaiting first voucher",
             "signature_hex": "0" * 64,
+            "settled": False,
+            "settled_tx": None,
             "latest_voucher": {
                 "channel_id": channel_id,
                 "cumulative_amount": 0,
