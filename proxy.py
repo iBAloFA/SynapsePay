@@ -1,16 +1,17 @@
 import os
 import json
 import base64
+import httpx
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from nacl.signing import VerifyKey
-from nacl.encoding import HexEncoder
 
-from solana.rpc.api import Client
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solders.system_program import transfer, TransferParams
+from solders.message import Message
 from solders.transaction import Transaction
+from solders.hash import Hash
 
 app = FastAPI(title="SynapsePay Proxy Gateway")
 
@@ -26,20 +27,29 @@ app.add_middleware(
 # Unified global state
 CHANNEL_STATE = {}
 
-# Solana Devnet Client Setup
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.devnet.solana.com")
-solana_client = Client(SOLANA_RPC)
 
 
 def get_payer_keypair() -> Keypair:
     raw_key = os.getenv("SETTLEMENT_PRIVATE_KEY")
     if not raw_key:
-        raise ValueError("SETTLEMENT_PRIVATE_KEY environment variable is missing on Render.")
-    
-    # Clean up formatting in case it was pasted with whitespace or quotes
+        raise ValueError("SETTLEMENT_PRIVATE_KEY environment variable is missing.")
     raw_key = raw_key.strip().strip("'").strip('"')
-    key_bytes = bytes(json.loads(raw_key))
-    return Keypair.from_bytes(key_bytes)
+    return Keypair.from_bytes(bytes(json.loads(raw_key)))
+
+
+def solana_rpc_call(method: str, params: list):
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params
+    }
+    resp = httpx.post(SOLANA_RPC, json=payload, timeout=20.0)
+    data = resp.json()
+    if "error" in data:
+        raise RuntimeError(f"Solana RPC Error: {data['error']}")
+    return data["result"]
 
 
 @app.get("/")
@@ -82,7 +92,7 @@ async def proxy_completion(request: Request):
     channel_id = voucher.get("channel_id", 101)
     cumulative_amount = voucher.get("cumulative_amount", 0)
 
-    # 2. Verify Ed25519 signature off-chain
+    # Off-chain Ed25519 verification
     try:
         vk_bytes = bytes.fromhex(agent_pubkey_hex) if len(agent_pubkey_hex) == 64 else base64.b64decode(agent_pubkey_hex)
         verify_key = VerifyKey(vk_bytes)
@@ -90,17 +100,15 @@ async def proxy_completion(request: Request):
     except Exception:
         raise HTTPException(status_code=403, detail="Invalid cryptographic signature on voucher")
 
-    # 3. Monotonic amount validation
+    # Monotonic assertion
     prev_state = CHANNEL_STATE.get(channel_id, {"highest_amount": 0})
     if cumulative_amount < prev_state["highest_amount"]:
         raise HTTPException(status_code=400, detail="Non-monotonic payment voucher")
 
-    # 4. Store updated state
-    sig_hex = sig_bytes.hex()
     CHANNEL_STATE[channel_id] = {
         "channel_id": channel_id,
         "highest_amount": cumulative_amount,
-        "signature_hex": sig_hex,
+        "signature_hex": sig_bytes.hex(),
         "agent": agent_pubkey_hex,
         "latest_voucher": voucher
     }
@@ -134,7 +142,6 @@ def get_latest_channel_state(channel_id: int):
     return CHANNEL_STATE[channel_id]
 
 
-# Supports both POST (from Streamlit button) and GET requests without 405 errors
 @app.api_route("/channel/{channel_id}/settle", methods=["GET", "POST"])
 def trigger_settle_endpoint(channel_id: int):
     state = CHANNEL_STATE.get(channel_id)
@@ -145,18 +152,15 @@ def trigger_settle_endpoint(channel_id: int):
         )
 
     try:
-        # Load your SolPG fee-payer wallet from Render environment variables
         payer = get_payer_keypair()
         cumulative_units = state["highest_amount"]
-
-        # Convert micro-units to lamports (1 lamport = 1 micro-unit, minimum dust floor)
         settle_lamports = max(int(cumulative_units), 1000)
 
-        # Get recent blockhash from Solana Devnet
-        blockhash_resp = solana_client.get_latest_blockhash()
-        recent_blockhash = blockhash_resp.value.blockhash
+        # 1. Fetch latest blockhash via direct JSON-RPC
+        blockhash_info = solana_rpc_call("getLatestBlockhash", [{"commitment": "confirmed"}])
+        recent_blockhash = Hash.from_string(blockhash_info["value"]["blockhash"])
 
-        # Transfer instruction executed on-chain to confirm settlement
+        # 2. Build on-chain transfer instruction
         ix = transfer(
             TransferParams(
                 from_pubkey=payer.pubkey(),
@@ -165,18 +169,15 @@ def trigger_settle_endpoint(channel_id: int):
             )
         )
 
-        tx = Transaction.new_signed_with_payer(
-            [ix],
-            payer.pubkey(),
-            [payer],
-            recent_blockhash
-        )
+        # 3. Compile message and sign transaction with solders
+        msg = Message([ix], payer.pubkey())
+        tx = Transaction([payer], msg, recent_blockhash)
 
-        # Send transaction directly to the Solana Devnet cluster
-        result = solana_client.send_transaction(tx)
-        tx_hash = str(result.value)
+        # 4. Serialize and send base64 transaction to Devnet
+        tx_bytes = bytes(tx)
+        tx_b64 = base64.b64encode(tx_bytes).decode("utf-8")
+        tx_hash = solana_rpc_call("sendTransaction", [tx_b64, {"encoding": "base64"}])
 
-        # Update in-memory state
         state["settled"] = True
         state["settled_tx"] = tx_hash
 
