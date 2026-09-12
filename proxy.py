@@ -62,5 +62,7 @@ def get_channel_voucher(channel_id: int):
     return CHANNEL_STATE[channel_id]
 
 if __name__ == "__main__":
+    import os
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="127.0.0.1", port=port, reload=False)
