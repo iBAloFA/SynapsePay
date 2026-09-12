@@ -5,7 +5,7 @@ from nacl.signing import SigningKey
 import httpx
 
 class SynapseAgentClient:
-    def __init__(self, channel_id: int, proxy_url: str = "http://127.0.0.1:8000"):
+    def __init__(self, channel_id: int = 101, proxy_url: str = "https://synapsepay-proxy.onrender.com"):
         # Generate or load an Ed25519 signing keypair for the agent
         self.signing_key = SigningKey.generate()
         self.verify_key = self.signing_key.verify_key

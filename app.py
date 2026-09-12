@@ -115,9 +115,11 @@ st.sidebar.markdown("""
 **AUTH:** ZERO-GAS OFF-CHAIN VOUCHER
 """)
 
+PROXY_URL = "https://synapsepay-proxy.onrender.com"
+
 def fetch_channel_data(c_id):
     try:
-        res = httpx.get(f"http://127.0.0.1:8000/channel/{c_id}/latest", timeout=1.5)
+        res = httpx.get(f"{PROXY_URL}/channel/{c_id}/latest", timeout=1.5)
         if res.status_code == 200:
             return res.json()
     except Exception:
