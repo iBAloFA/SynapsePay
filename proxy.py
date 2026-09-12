@@ -154,6 +154,7 @@ def trigger_settle_endpoint(channel_id: int):
         )
 
     try:
+        # 0. Load the SolPG keypair from Render environment
         payer = get_payer_keypair()
         cumulative_units = state["highest_amount"]
         settle_lamports = max(int(cumulative_units), 1000)
@@ -178,16 +179,19 @@ def trigger_settle_endpoint(channel_id: int):
         # 4. Serialize and send base64 transaction to Devnet
         tx_bytes = bytes(tx)
         tx_b64 = base64.b64encode(tx_bytes).decode("utf-8")
-        tx_hash = solana_rpc_call("sendTransaction", [tx_b64, {"encoding": "base64", "skipPreflight": True, "preflightCommitment": "finalized"}])
 
+        # 5. Real base58 signature returned by the validator node
+        real_tx_sig = solana_rpc_call("sendTransaction", [tx_b64, {"encoding": "base64", "skipPreflight": True, "preflightCommitment": "finalized"}])
+
+        # 6. Update in-memory state with the genuine signature
         state["settled"] = True
-        state["settled_tx"] = tx_hash
+        state["settled_tx"] = str(real_tx_sig)
 
         return {
             "status": "success",
             "channel_id": channel_id,
             "settled_amount": cumulative_units,
-            "tx_hash": tx_hash
+            "tx_hash": str(real_tx_sig)
         }
 
     except Exception as e:
