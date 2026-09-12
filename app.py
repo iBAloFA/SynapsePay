@@ -2,11 +2,11 @@ import streamlit as st
 import httpx
 import json
 import time
+import html
 from embedded_agent import EmbeddedAgent
 
 st.set_page_config(page_title="SYNAPSEPAY // AGENT PROTOCOL", layout="wide")
 
-# Cloud or Local Backend Configuration
 PROXY_URL = "https://synapsepay-proxy.onrender.com"
 
 # Neubrutalism CSS
@@ -55,7 +55,7 @@ NEUBRUTALISM_CSS = """
     font-weight: 700 !important;
     box-shadow: 4px 4px 0px #000000 !important;
 }
-/* Neubrutalist Card Classes */
+/* Neubrutalist Cards */
 .nb-card {
     border: 3px solid #000000;
     box-shadow: 6px 6px 0px #000000;
@@ -100,9 +100,38 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+
+def fetch_channel_data(c_id: int):
+    try:
+        res = httpx.get(f"{PROXY_URL}/channel/{c_id}/latest", timeout=4.0)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        return None
+    return None
+
+
+def fetch_all_channels():
+    try:
+        res = httpx.get(f"{PROXY_URL}/channels", timeout=3.0)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    return [101]
+
+
 # Sidebar Controls
 st.sidebar.markdown("### 01 // CONTROL PANEL")
-channel_id = st.sidebar.number_input("TARGET CHANNEL ID", min_value=1, value=101, step=1)
+
+known_channels = fetch_all_channels()
+mode = st.sidebar.radio("CHANNEL SELECTOR", ["Active Channels", "Custom / New Channel"])
+
+if mode == "Active Channels":
+    channel_id = st.sidebar.selectbox("TARGET CHANNEL ID", options=known_channels)
+else:
+    channel_id = st.sidebar.number_input("CUSTOM CHANNEL ID", min_value=1, value=max(known_channels) + 1, step=1)
+
 poll_freq = st.sidebar.slider("POLL INTERVAL (SEC)", 1, 5, 2)
 refresh_now = st.sidebar.button("FORCE REFRESH")
 st.sidebar.markdown("---")
@@ -114,35 +143,27 @@ st.sidebar.markdown("""
 **AUTH:** ZERO-GAS OFF-CHAIN VOUCHER  
 """)
 
-
-def fetch_channel_data(c_id: int):
-    try:
-        res = httpx.get(f"{PROXY_URL}/channel/{c_id}/latest", timeout=5.0)
-        if res.status_code == 200:
-            return res.json()
-    except Exception:
-        return None
-    return None
-
-
-# Initialize persistent session agent
-if "agent_sim" not in st.session_state:
+# Dynamic Agent Re-instantiation when channel changes
+if "active_channel_id" not in st.session_state or st.session_state.active_channel_id != channel_id:
+    st.session_state.active_channel_id = channel_id
     st.session_state.agent_sim = EmbeddedAgent(PROXY_URL, channel_id)
+    st.session_state.last_tx = None
 
-# Fetch latest on-chain proxy state
+# Query backend state
 data = fetch_channel_data(channel_id)
 current_amt = data.get("highest_amount", 0) if data else 0
-
-# Check settled state from proxy or active session
 is_settled = data.get("settled", False) if data else False
 saved_tx = data.get("settled_tx") or st.session_state.get("last_tx")
 
-# If auto-stream is enabled and channel not yet settled, send continuous vouchers
+# Trigger auto-stream if active and not yet settled
 if auto_stream and not is_settled:
     st.session_state.agent_sim.trigger_micro_payment(current_total=current_amt, step=20)
     data = fetch_channel_data(channel_id)
+    current_amt = data.get("highest_amount", 0) if data else current_amt
+    is_settled = data.get("settled", False) if data else is_settled
+    saved_tx = data.get("settled_tx") or st.session_state.get("last_tx")
 
-# Top Stat Row
+# Top Metric Row
 c1, c2, c3 = st.columns(3)
 
 if data:
@@ -151,14 +172,14 @@ if data:
     sig = data.get("signature_hex", "")
     voucher = data.get("latest_voucher", {})
 
-    status_badge = "STATE: SETTLED ON-CHAIN" if is_settled else "STATE: ESCROW LOCKED"
+    status_state_text = "STATE: SETTLED ON-CHAIN" if is_settled else "STATE: ESCROW LOCKED"
 
     with c1:
         st.markdown(f"""
         <div class="nb-card nb-cyan">
             <span class="nb-tag">Channel Status</span>
             <div class="nb-metric-num">ACTIVE #{channel_id}</div>
-            <div>{status_badge}</div>
+            <div>{html.escape(status_state_text)}</div>
         </div>
         """, unsafe_allow_html=True)
     with c2:
@@ -178,29 +199,31 @@ if data:
         </div>
         """, unsafe_allow_html=True)
 
-    # Details Section
+    # Details Split Row
     col_left, col_right = st.columns([1.2, 1])
 
     with col_left:
         st.markdown("### 02 // VALIDATED ED25519 VOUCHER")
+        pretty_json = html.escape(json.dumps(voucher, indent=2))
         st.markdown(f"""
         <div class="nb-card nb-white" style="font-family: monospace;">
-            <pre style="margin:0; font-weight:700;">{json.dumps(voucher, indent=2)}</pre>
+            <pre style="margin:0; font-weight:700;">{pretty_json}</pre>
         </div>
         """, unsafe_allow_html=True)
 
     with col_right:
         st.markdown("### 03 // ON-CHAIN SETTLEMENT PDA")
 
-        # Settlement Execution Action
         if st.button("⚡ EXECUTE DEVNET SETTLEMENT NOW"):
-            with st.spinner("Submitting atomic close transaction to Solana Devnet..."):
+            with st.spinner("Broadcasting and confirming on Solana Devnet..."):
                 try:
-                    res = httpx.post(f"{PROXY_URL}/channel/{channel_id}/settle", timeout=20.0)
+                    res = httpx.post(f"{PROXY_URL}/channel/{channel_id}/settle", timeout=30.0)
                     if res.status_code == 200:
                         settle_res = res.json()
                         tx_hash = settle_res.get("tx_hash")
                         st.session_state.last_tx = tx_hash
+                        saved_tx = tx_hash
+                        is_settled = True
                         st.success("Settled on Solana Devnet!")
                         st.rerun()
                     else:
@@ -208,28 +231,28 @@ if data:
                 except Exception as err:
                     st.error(f"Settlement failed: {err}")
 
-        # Derive live Explorer link
-        tx_display = saved_tx
-        explorer_link = (
-            f"https://explorer.solana.com/tx/{tx_display}?cluster=devnet"
-            if tx_display
-            else None
-        )
+        # Construct settlement link
+        if saved_tx:
+            clean_tx = html.escape(str(saved_tx))
+            settle_status_html = (
+                f'<a href="https://explorer.solana.com/tx/{clean_tx}?cluster=devnet" '
+                f'target="_blank" style="color:#000000; text-decoration: underline; font-weight: 900;">'
+                f'VIEW CONFIRMED TX ON EXPLORER ↗</a>'
+            )
+        else:
+            settle_status_html = 'PREPARING ATOMIC INSTRUCTION CLOSE'
 
-        settle_status_html = (
-            f'<a href="{explorer_link}" target="_blank" style="color:#000; text-decoration: underline; font-weight: 900;">VIEW CONFIRMED TX ON EXPLORER ↗</a>'
-            if explorer_link
-            else 'PREPARING ATOMIC INSTRUCTION CLOSE'
-        )
+        safe_agent = html.escape(str(agent_key))
+        safe_sig = html.escape(str(sig[:32])) + "..."
 
         pda_card_html = (
             '<div class="nb-card nb-green" style="word-break: break-all;">'
             '<span class="nb-tag">AGENT PUBKEY</span>'
-            f'<div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{agent_key}</div>'
+            f'<div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{safe_agent}</div>'
             '<span class="nb-tag">SIGNATURE ATTESTATION</span>'
-            f'<div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{sig[:32]}...</div>'
+            f'<div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{safe_sig}</div>'
             '<span class="nb-tag">SOLANA SETTLEMENT</span>'
-            f'<div style="font-size: 0.85rem; font-weight: 900;">{settle_status_html}</div>'
+            f'<div style="font-size: 0.85rem;">{settle_status_html}</div>'
             '</div>'
         )
         st.markdown(pda_card_html, unsafe_allow_html=True)
@@ -269,7 +292,7 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-# Poll Interval Loop
+# Loop trigger for auto-stream
 if auto_stream and not is_settled:
     time.sleep(poll_freq)
     st.rerun()

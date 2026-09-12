@@ -1,14 +1,12 @@
 import os
 import json
 import base64
-import httpx
 import time
+import httpx
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from nacl.signing import VerifyKey
-
 from solders.keypair import Keypair
-from solders.pubkey import Pubkey
 from solders.system_program import transfer, TransferParams
 from solders.message import Message
 from solders.transaction import Transaction
@@ -16,7 +14,6 @@ from solders.hash import Hash
 
 app = FastAPI(title="SynapsePay Proxy Gateway")
 
-# Enable CORS for Streamlit Cloud
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,9 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Unified global state
 CHANNEL_STATE = {}
-
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.devnet.solana.com")
 
 
@@ -44,9 +39,9 @@ def solana_rpc_call(method: str, params: list):
         "jsonrpc": "2.0",
         "id": 1,
         "method": method,
-        "params": params
+        "params": params,
     }
-    resp = httpx.post(SOLANA_RPC, json=payload, timeout=20.0)
+    resp = httpx.post(SOLANA_RPC, json=payload, timeout=25.0)
     data = resp.json()
     if "error" in data:
         raise RuntimeError(f"Solana RPC Error: {data['error']}")
@@ -61,6 +56,12 @@ def root():
 @app.get("/healthz")
 def healthz():
     return {"status": "healthy"}
+
+
+@app.get("/channels")
+def list_active_channels():
+    # Returns all initialized channel IDs, defaulting to [101] if empty
+    return list(CHANNEL_STATE.keys()) if CHANNEL_STATE else [101]
 
 
 @app.post("/v1/chat/completions")
@@ -80,7 +81,7 @@ async def proxy_completion(request: Request):
             agent_pubkey_hex = voucher["agent_pubkey"]
         elif x_payload and x_sig and x_pubkey:
             voucher = json.loads(x_payload)
-            voucher_bytes = json.dumps(voucher, sort_keys=True, separators=(',', ':')).encode("utf-8")
+            voucher_bytes = json.dumps(voucher, sort_keys=True, separators=(",", ":")).encode("utf-8")
             sig_bytes = bytes.fromhex(x_sig)
             agent_pubkey_hex = x_pubkey
         else:
@@ -93,7 +94,6 @@ async def proxy_completion(request: Request):
     channel_id = voucher.get("channel_id", 101)
     cumulative_amount = voucher.get("cumulative_amount", 0)
 
-    # Off-chain Ed25519 verification
     try:
         vk_bytes = bytes.fromhex(agent_pubkey_hex) if len(agent_pubkey_hex) == 64 else base64.b64decode(agent_pubkey_hex)
         verify_key = VerifyKey(vk_bytes)
@@ -101,28 +101,35 @@ async def proxy_completion(request: Request):
     except Exception:
         raise HTTPException(status_code=403, detail="Invalid cryptographic signature on voucher")
 
-    # Monotonic assertion
     prev_state = CHANNEL_STATE.get(channel_id, {"highest_amount": 0})
     if cumulative_amount < prev_state["highest_amount"]:
         raise HTTPException(status_code=400, detail="Non-monotonic payment voucher")
+
+    # Retain settled flags if channel already exists
+    was_settled = prev_state.get("settled", False)
+    settled_tx = prev_state.get("settled_tx", None)
 
     CHANNEL_STATE[channel_id] = {
         "channel_id": channel_id,
         "highest_amount": cumulative_amount,
         "signature_hex": sig_bytes.hex(),
         "agent": agent_pubkey_hex,
-        "latest_voucher": voucher
+        "latest_voucher": voucher,
+        "settled": was_settled,
+        "settled_tx": settled_tx,
     }
 
     return {
-        "id": f"synapse-{int(os.times().system)}",
+        "id": f"synapse-{int(time.time())}",
         "object": "chat.completion",
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": f"Executed query: Settled [{cumulative_amount}] micro-units."
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": f"Executed query: Settled [{cumulative_amount}] micro-units.",
+                }
             }
-        }]
+        ],
     }
 
 
@@ -139,8 +146,8 @@ def get_latest_channel_state(channel_id: int):
             "latest_voucher": {
                 "channel_id": channel_id,
                 "cumulative_amount": 0,
-                "status": "initialized"
-            }
+                "status": "initialized",
+            },
         }
     return CHANNEL_STATE[channel_id]
 
@@ -151,17 +158,19 @@ def trigger_settle_endpoint(channel_id: int):
     if not state or state.get("highest_amount", 0) == 0:
         raise HTTPException(
             status_code=400,
-            detail=f"Channel #{channel_id} has no active vouchers to settle."
+            detail=f"Channel #{channel_id} has no active vouchers to settle.",
         )
 
     try:
-        # 0. Load the SolPG keypair from Render environment
         payer = get_payer_keypair()
         cumulative_units = state["highest_amount"]
         settle_lamports = max(int(cumulative_units), 1000)
 
-        # 1. Fetch latest blockhash via direct JSON-RPC
-        blockhash_info = solana_rpc_call("getLatestBlockhash", [{"commitment": "confirmed"}])
+        # 1. Fetch blockhash with confirmed commitment
+        blockhash_info = solana_rpc_call(
+            "getLatestBlockhash", 
+            [{"commitment": "confirmed"}]
+        )
         recent_blockhash = Hash.from_string(blockhash_info["value"]["blockhash"])
 
         # 2. Build on-chain transfer instruction
@@ -169,40 +178,44 @@ def trigger_settle_endpoint(channel_id: int):
             TransferParams(
                 from_pubkey=payer.pubkey(),
                 to_pubkey=payer.pubkey(),
-                lamports=settle_lamports
+                lamports=settle_lamports,
             )
         )
 
-        # 3. Compile message and sign transaction with solders
+        # 3. Construct and sign
         msg = Message([ix], payer.pubkey())
         tx = Transaction([payer], msg, recent_blockhash)
 
-        # 4. Serialize and send base64 transaction to Devnet
+        # 4. Broadcast with preflight verification
         tx_bytes = bytes(tx)
         tx_b64 = base64.b64encode(tx_bytes).decode("utf-8")
+        real_tx_sig = solana_rpc_call(
+            "sendTransaction",
+            [
+                tx_b64,
+                {
+                    "encoding": "base64",
+                    "skipPreflight": False,
+                    "preflightCommitment": "confirmed",
+                },
+            ],
+        )
 
-        # 5. Real base58 signature returned by the validator node
-        real_tx_sig = solana_rpc_call("sendTransaction", [tx_b64, {"encoding": "base64", "skipPreflight": False, "preflightCommitment": "confirmed"}])
-
-        # 5.5 Wait for cluster confirmation (up to 15 seconds)
-        confirmed = False
+        # 5. Wait for cluster confirmation
         for _ in range(15):
             time.sleep(1)
-            status_resp = solana_rpc_call("getSignatureStatuses", [[real_tx_sig], {"searchTransactionHistory": True}])
+            status_resp = solana_rpc_call(
+                "getSignatureStatuses",
+                [[real_tx_sig], {"searchTransactionHistory": True}],
+            )
             statuses = status_resp.get("value", [])
             if statuses and statuses[0] is not None:
                 status = statuses[0]
                 if status.get("err"):
-                    raise RuntimeError(f"Solana transaction failed: {status['err']}")
-                if status.get("confirmationStatus") in ["confirmed", "finalized"]:
-                    confirmed = True
+                    raise RuntimeError(f"Solana transaction failed on-chain: {status['err']}")
+                if status.get("confirmationStatus") in ("confirmed", "finalized"):
                     break
 
-        if not confirmed:
-            # Still valid on chain, will finalize in background
-            pass
-
-        # 6. Update in-memory state with the genuine signature
         state["settled"] = True
         state["settled_tx"] = str(real_tx_sig)
 
@@ -210,7 +223,7 @@ def trigger_settle_endpoint(channel_id: int):
             "status": "success",
             "channel_id": channel_id,
             "settled_amount": cumulative_units,
-            "tx_hash": str(real_tx_sig)
+            "tx_hash": str(real_tx_sig),
         }
 
     except Exception as e:
