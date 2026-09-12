@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+sand-box/
+.streamlit/
+.anchor
+.DS_Store
+target
+**/*.rs.bk
+node_modules
+test-ledger
+.yarn
+synapse_pay-keypair.json
+*keypair*.json

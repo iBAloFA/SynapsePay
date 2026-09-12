@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pynacl
+httpx
+solana
+solders
+streamlit
