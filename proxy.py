@@ -3,8 +3,17 @@ import json
 from fastapi import FastAPI, Header, HTTPException, Request
 from nacl.signing import VerifyKey
 import httpx
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="SynapsePay Proxy Gateway")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 CHANNEL_STATE = {}
 
