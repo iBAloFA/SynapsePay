@@ -1,5 +1,6 @@
 # SynapsePay ⚡
 **Sub-cent State Channel Micropayment Gateway for Autonomous AI Agents on Solana**
+![SynapsePay Neubrutalist Dashboard](dashboard.png)
 
 SynapsePay is a unidirectional, state-channel micropayment proxy tailored for autonomous machine-to-machine (M2M) micro-commerce. It allows autonomous agents to stream sub-cent micro-authorizations per LLM token or API call off-chain, backed by a Solana Anchor escrow program with single-transaction atomic batch settlement.
 

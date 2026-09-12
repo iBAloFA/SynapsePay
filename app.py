@@ -179,10 +179,8 @@ if data:
         <div class="nb-card nb-green" style="word-break: break-all;">
             <span class="nb-tag">AGENT PUBKEY</span>
             <div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{agent_key}</div>
-            
             <span class="nb-tag">SIGNATURE ATTESTATION</span>
             <div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{sig[:32]}...</div>
-            
             <span class="nb-tag">SOLANA SETTLEMENT</span>
             <div style="font-size: 0.85rem;">PREPARING ATOMIC INSTRUCTION CLOSE</div>
         </div>
