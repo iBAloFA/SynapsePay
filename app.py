@@ -2,6 +2,7 @@ import streamlit as st
 import httpx
 import json
 import time
+from embedded_agent import EmbeddedAgent
 
 st.set_page_config(page_title="SYNAPSEPAY // AGENT PROTOCOL", layout="wide")
 
@@ -114,6 +115,23 @@ st.sidebar.markdown("""
 **VM:** ANCHOR ESCROW / ED25519  
 **AUTH:** ZERO-GAS OFF-CHAIN VOUCHER
 """)
+
+# Sidebar Demo Control
+st.sidebar.markdown("---")
+auto_stream = st.sidebar.checkbox("⚡ AUTO-STREAM MICROPAYMENTS", value=True)
+
+# Initialize persistent session agent
+if "agent_sim" not in st.session_state:
+    st.session_state.agent_sim = EmbeddedAgent(PROXY_URL, channel_id)
+
+# Fetch latest on-chain proxy state
+data = fetch_channel_data(channel_id)
+current_amt = data.get("highest_amount", 0) if data else 0
+
+# If auto-stream is enabled, generate and post a signed voucher automatically
+if auto_stream:
+    st.session_state.agent_sim.trigger_micro_payment(current_total=current_amt, step=20)
+    data = fetch_channel_data(channel_id)
 
 PROXY_URL = "https://synapsepay-proxy.onrender.com"
 
