@@ -9,21 +9,18 @@ st.set_page_config(page_title="SYNAPSEPAY // AGENT PROTOCOL", layout="wide")
 
 PROXY_URL = "https://synapsepay-proxy.onrender.com"
 
-# Neubrutalism CSS
+# Neubrutalism UI Styling
 NEUBRUTALISM_CSS = """
 <style>
-/* Global Canvas */
 .stApp {
     background-color: #FFFDF0;
     font-family: 'Courier New', Courier, monospace, sans-serif;
     color: #000000;
 }
-/* Sidebar */
 [data-testid="stSidebar"] {
     background-color: #FFFDF0 !important;
     border-right: 4px solid #000000 !important;
 }
-/* Standard Buttons */
 .stButton > button {
     background-color: #FFE600 !important;
     color: #000000 !important;
@@ -32,7 +29,7 @@ NEUBRUTALISM_CSS = """
     font-weight: 900 !important;
     text-transform: uppercase !important;
     letter-spacing: 1px !important;
-    padding: 0.6rem 1.4rem !important;
+    padding: 0.5rem 1.2rem !important;
     box-shadow: 4px 4px 0px #000000 !important;
     transition: transform 0.1s ease, box-shadow 0.1s ease !important;
 }
@@ -46,7 +43,6 @@ NEUBRUTALISM_CSS = """
     transform: translate(2px, 2px) !important;
     box-shadow: 2px 2px 0px #000000 !important;
 }
-/* Text & Number Inputs */
 .stTextInput input, .stNumberInput input {
     background-color: #FFFFFF !important;
     border: 3px solid #000000 !important;
@@ -55,7 +51,6 @@ NEUBRUTALISM_CSS = """
     font-weight: 700 !important;
     box-shadow: 4px 4px 0px #000000 !important;
 }
-/* Neubrutalist Cards */
 .nb-card {
     border: 3px solid #000000;
     box-shadow: 6px 6px 0px #000000;
@@ -88,14 +83,14 @@ NEUBRUTALISM_CSS = """
 """
 st.markdown(NEUBRUTALISM_CSS, unsafe_allow_html=True)
 
-# App Header
+# Header
 st.markdown("""
 <div style="border-bottom: 4px solid #000; padding-bottom: 0.8rem; margin-bottom: 1.5rem;">
-    <h1 style="font-size: 2.5rem; font-weight: 900; text-transform: uppercase; margin: 0;">
+    <h1 style="font-size: 2.3rem; font-weight: 900; text-transform: uppercase; margin: 0;">
         ⚡ SYNAPSEPAY // AGENT SETTLEMENT GATEWAY
     </h1>
     <p style="font-weight: 700; margin: 0.3rem 0 0 0;">
-        SUB-CENT STATE CHANNEL MICRO-COMMERCE ON SOLANA // PROTOCOL MONITOR
+        SOLANA HIGH-THROUGHPUT STATE CHANNELS // MACHINE-TO-MACHINE MICROPAYMENTS
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -103,7 +98,7 @@ st.markdown("""
 
 def fetch_channel_data(c_id: int):
     try:
-        res = httpx.get(f"{PROXY_URL}/channel/{c_id}/latest", timeout=4.0)
+        res = httpx.get(f"{PROXY_URL}/channel/{c_id}/latest", timeout=5.0)
         if res.status_code == 200:
             return res.json()
     except Exception:
@@ -115,95 +110,121 @@ def fetch_all_channels():
     try:
         res = httpx.get(f"{PROXY_URL}/channels", timeout=3.0)
         if res.status_code == 200:
-            return res.json()
+            val = res.json()
+            if isinstance(val, list) and len(val) > 0:
+                return val
     except Exception:
         pass
     return [101]
 
 
 # Sidebar Controls
-st.sidebar.markdown("### 01 // CONTROL PANEL")
+st.sidebar.markdown("### 01 // CHANNEL SELECTOR")
 
 known_channels = fetch_all_channels()
-mode = st.sidebar.radio("CHANNEL SELECTOR", ["Active Channels", "Custom / New Channel"])
+mode = st.sidebar.radio("MODE", ["Active Channels", "Create New Channel"])
 
 if mode == "Active Channels":
     channel_id = st.sidebar.selectbox("TARGET CHANNEL ID", options=known_channels)
 else:
-    channel_id = st.sidebar.number_input("CUSTOM CHANNEL ID", min_value=1, value=max(known_channels) + 1, step=1)
+    channel_id = st.sidebar.number_input("NEW CHANNEL ID", min_value=1, value=max(known_channels) + 1, step=1)
 
-poll_freq = st.sidebar.slider("POLL INTERVAL (SEC)", 1, 5, 2)
-refresh_now = st.sidebar.button("FORCE REFRESH")
-st.sidebar.markdown("---")
-auto_stream = st.sidebar.checkbox("⚡ AUTO-STREAM MICROPAYMENTS", value=True)
-st.sidebar.markdown("---")
-st.sidebar.markdown("""
-**NETWORK:** SOLANA DEVNET  
-**VM:** ANCHOR ESCROW / ED25519  
-**AUTH:** ZERO-GAS OFF-CHAIN VOUCHER  
-""")
-
-# Dynamic Agent Re-instantiation when channel changes
+# Ensure Agent is cleanly mapped to the selected Channel ID
 if "active_channel_id" not in st.session_state or st.session_state.active_channel_id != channel_id:
     st.session_state.active_channel_id = channel_id
     st.session_state.agent_sim = EmbeddedAgent(PROXY_URL, channel_id)
     st.session_state.last_tx = None
 
-# Query backend state
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 02 // STREAM CONFIG")
+auto_stream = st.sidebar.toggle("ENABLE CONTINUOUS STREAM", value=False)
+stream_step = st.sidebar.select_slider("STEP SIZE (μ-UNITS)", options=[10, 20, 50, 100, 250, 500], value=20)
+poll_freq = st.sidebar.slider("STREAM INTERVAL (SEC)", min_value=1, max_value=5, value=2)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("""
+**NETWORK:** SOLANA DEVNET  
+**CURVE:** ED25519 (NATIVE)  
+**PROTOCOL:** MONOTONIC VOUCHER STATE  
+""")
+
+# Load Backend State
 data = fetch_channel_data(channel_id)
-current_amt = data.get("highest_amount", 0) if data else 0
-is_settled = data.get("settled", False) if data else False
-saved_tx = data.get("settled_tx") or st.session_state.get("last_tx")
+current_amt = data.get("highest_amount", 0) if isinstance(data, dict) else 0
+is_settled = data.get("settled", False) if isinstance(data, dict) else False
+saved_tx = (data.get("settled_tx") if isinstance(data, dict) else None) or st.session_state.get("last_tx")
 
-# Trigger auto-stream if active and not yet settled
+# Automated Increment Loop
 if auto_stream and not is_settled:
-    st.session_state.agent_sim.trigger_micro_payment(current_total=current_amt, step=20)
+    st.session_state.agent_sim.trigger_micro_payment(current_total=current_amt, step=stream_step)
     data = fetch_channel_data(channel_id)
-    current_amt = data.get("highest_amount", 0) if data else current_amt
-    is_settled = data.get("settled", False) if data else is_settled
-    saved_tx = data.get("settled_tx") or st.session_state.get("last_tx")
+    if isinstance(data, dict):
+        current_amt = data.get("highest_amount", current_amt)
+        is_settled = data.get("settled", is_settled)
+        saved_tx = data.get("settled_tx") or saved_tx
 
-# Top Metric Row
+# Top Metrics Bar
 c1, c2, c3 = st.columns(3)
 
-if data:
+if isinstance(data, dict) and data.get("highest_amount", 0) > 0:
     amt = data.get("highest_amount", 0)
     agent_key = data.get("agent", "Unknown")
     sig = data.get("signature_hex", "")
     voucher = data.get("latest_voucher", {})
-
-    status_state_text = "STATE: SETTLED ON-CHAIN" if is_settled else "STATE: ESCROW LOCKED"
+    status_label = "STATE: SETTLED ON-CHAIN" if is_settled else "STATE: ESCROW LOCKED"
 
     with c1:
         st.markdown(f"""
         <div class="nb-card nb-cyan">
             <span class="nb-tag">Channel Status</span>
-            <div class="nb-metric-num">ACTIVE #{channel_id}</div>
-            <div>{html.escape(status_state_text)}</div>
+            <div class="nb-metric-num">#{channel_id}</div>
+            <div>{html.escape(status_label)}</div>
         </div>
         """, unsafe_allow_html=True)
     with c2:
         st.markdown(f"""
         <div class="nb-card nb-pink">
-            <span class="nb-tag">Cumulative Spent</span>
+            <span class="nb-tag">Cumulative Balance</span>
             <div class="nb-metric-num">{amt:,} μ-UNITS</div>
-            <div>MONOTONIC STREAM VERIFIED</div>
+            <div>VALIDATED MONOTONIC STREAM</div>
         </div>
         """, unsafe_allow_html=True)
     with c3:
         st.markdown("""
         <div class="nb-card nb-yellow">
-            <span class="nb-tag">Efficiency</span>
+            <span class="nb-tag">Network Efficiency</span>
             <div class="nb-metric-num">99.98%</div>
             <div>TX OVERHEAD ELIMINATED</div>
         </div>
         """, unsafe_allow_html=True)
 
-    # Details Split Row
+    # Manual Control Bar & Inspection
+    st.markdown("### 02 // MANUAL MICRO-PAYMENT DISPATCH")
+    m1, m2, m3, m4 = st.columns([1, 1, 1, 1.5])
+    with m1:
+        if st.button("➕ DISPATCH +20", disabled=is_settled):
+            st.session_state.agent_sim.trigger_micro_payment(current_total=current_amt, step=20)
+            st.rerun()
+    with m2:
+        if st.button("➕ DISPATCH +100", disabled=is_settled):
+            st.session_state.agent_sim.trigger_micro_payment(current_total=current_amt, step=100)
+            st.rerun()
+    with m3:
+        if st.button("➕ DISPATCH +500", disabled=is_settled):
+            st.session_state.agent_sim.trigger_micro_payment(current_total=current_amt, step=500)
+            st.rerun()
+    with m4:
+        if is_settled:
+            if st.button("🔄 REOPEN / RESET CHANNEL"):
+                httpx.post(f"{PROXY_URL}/channel/{channel_id}/reset", timeout=5.0)
+                st.session_state.last_tx = None
+                st.rerun()
+
+    # Split Workspace
     col_left, col_right = st.columns([1.2, 1])
 
     with col_left:
-        st.markdown("### 02 // VALIDATED ED25519 VOUCHER")
+        st.markdown("### 03 // OFF-CHAIN ED25519 VOUCHER")
         pretty_json = html.escape(json.dumps(voucher, indent=2))
         st.markdown(f"""
         <div class="nb-card nb-white" style="font-family: monospace;">
@@ -212,26 +233,30 @@ if data:
         """, unsafe_allow_html=True)
 
     with col_right:
-        st.markdown("### 03 // ON-CHAIN SETTLEMENT PDA")
+        st.markdown("### 04 // ON-CHAIN SETTLEMENT PDA")
 
-        if st.button("⚡ EXECUTE DEVNET SETTLEMENT NOW"):
-            with st.spinner("Broadcasting and confirming on Solana Devnet..."):
-                try:
-                    res = httpx.post(f"{PROXY_URL}/channel/{channel_id}/settle", timeout=30.0)
-                    if res.status_code == 200:
-                        settle_res = res.json()
-                        tx_hash = settle_res.get("tx_hash")
-                        st.session_state.last_tx = tx_hash
-                        saved_tx = tx_hash
-                        is_settled = True
-                        st.success("Settled on Solana Devnet!")
-                        st.rerun()
-                    else:
-                        st.error(f"Error {res.status_code}: {res.text}")
-                except Exception as err:
-                    st.error(f"Settlement failed: {err}")
+        # Devnet Settlement Trigger
+        if not is_settled:
+            if st.button("⚡ EXECUTE DEVNET SETTLEMENT NOW"):
+                with st.spinner("Flushing in-flight vouchers & broadcasting atomic close..."):
+                    # Cooldown buffer to give in-flight transactions time to land cleanly
+                    time.sleep(1.5)
+                    try:
+                        res = httpx.post(f"{PROXY_URL}/channel/{channel_id}/settle", timeout=30.0)
+                        if res.status_code == 200:
+                            settle_res = res.json()
+                            tx_hash = settle_res.get("tx_hash")
+                            st.session_state.last_tx = tx_hash
+                            saved_tx = tx_hash
+                            is_settled = True
+                            st.success("Confirmed on Solana Devnet!")
+                            st.rerun()
+                        else:
+                            st.error(f"Settlement Error {res.status_code}: {res.text}")
+                    except Exception as err:
+                        st.error(f"Settlement failed: {err}")
 
-        # Construct settlement link
+        # Live Explorer Link Generation
         if saved_tx:
             clean_tx = html.escape(str(saved_tx))
             settle_status_html = (
@@ -240,7 +265,7 @@ if data:
                 f'VIEW CONFIRMED TX ON EXPLORER ↗</a>'
             )
         else:
-            settle_status_html = 'PREPARING ATOMIC INSTRUCTION CLOSE'
+            settle_status_html = 'ESCROW ACTIVE // AWAITING CLOSE INSTRUCTION'
 
         safe_agent = html.escape(str(agent_key))
         safe_sig = html.escape(str(sig[:32])) + "..."
@@ -252,12 +277,13 @@ if data:
             '<span class="nb-tag">SIGNATURE ATTESTATION</span>'
             f'<div style="margin-bottom: 0.8rem; font-size: 0.85rem;">{safe_sig}</div>'
             '<span class="nb-tag">SOLANA SETTLEMENT</span>'
-            f'<div style="font-size: 0.85rem;">{settle_status_html}</div>'
+            f'<div style="font-size: 0.85rem; font-weight: 900;">{settle_status_html}</div>'
             '</div>'
         )
         st.markdown(pda_card_html, unsafe_allow_html=True)
 
 else:
+    # Empty / Uninitialized State
     with c1:
         st.markdown(f"""
         <div class="nb-card nb-pink">
@@ -269,7 +295,7 @@ else:
     with c2:
         st.markdown("""
         <div class="nb-card nb-yellow">
-            <span class="nb-tag">Cumulative Spent</span>
+            <span class="nb-tag">Cumulative Balance</span>
             <div class="nb-metric-num">0 μ-UNITS</div>
             <div>NO RECENT INVOCATIONS</div>
         </div>
@@ -278,21 +304,25 @@ else:
         st.markdown("""
         <div class="nb-card nb-cyan">
             <span class="nb-tag">Proxy Health</span>
-            <div class="nb-metric-num">CONNECTING</div>
-            <div>TARGET: CLOUD PROXY</div>
+            <div class="nb-metric-num">ONLINE</div>
+            <div>READY FOR INGESTION</div>
         </div>
         """, unsafe_allow_html=True)
 
     st.markdown("""
     <div class="nb-card nb-white">
-        <span class="nb-tag">SYSTEM STATUS</span>
-        <div style="margin-top: 0.5rem;">
-            Waiting for response from Render backend. If the free tier instance is sleeping, it will wake up in ~30 seconds.
+        <span class="nb-tag">GETTING STARTED</span>
+        <div style="margin-top: 0.5rem; font-weight: 700;">
+            Channel is empty. Use the sidebar to toggle <b>ENABLE CONTINUOUS STREAM</b> or dispatch micro-payments below to start accumulating verified vouchers.
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-# Loop trigger for auto-stream
+    if st.button("➕ DISPATCH INITIAL VOUCHER (+20)"):
+        st.session_state.agent_sim.trigger_micro_payment(current_total=0, step=20)
+        st.rerun()
+
+# Rerun timer when auto-streaming is enabled
 if auto_stream and not is_settled:
     time.sleep(poll_freq)
     st.rerun()

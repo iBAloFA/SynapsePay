@@ -22,6 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# In-memory channel store (maps channel_id -> channel ledger)
 CHANNEL_STATE = {}
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.devnet.solana.com")
 
@@ -60,8 +61,27 @@ def healthz():
 
 @app.get("/channels")
 def list_active_channels():
-    # Returns all initialized channel IDs, defaulting to [101] if empty
-    return list(CHANNEL_STATE.keys()) if CHANNEL_STATE else [101]
+    # Return all active/known channels. Defaults to [101] if none yet registered
+    return sorted(list(CHANNEL_STATE.keys())) if CHANNEL_STATE else [101]
+
+
+@app.post("/channel/{channel_id}/reset")
+def reset_channel(channel_id: int):
+    # Cleanses state to allow opening a fresh cycle on the same ID
+    CHANNEL_STATE[channel_id] = {
+        "channel_id": channel_id,
+        "highest_amount": 0,
+        "agent": "Awaiting first voucher",
+        "signature_hex": "0" * 64,
+        "settled": False,
+        "settled_tx": None,
+        "latest_voucher": {
+            "channel_id": channel_id,
+            "cumulative_amount": 0,
+            "status": "ready"
+        }
+    }
+    return {"status": "reset", "channel_id": channel_id}
 
 
 @app.post("/v1/chat/completions")
@@ -91,9 +111,10 @@ async def proxy_completion(request: Request):
             raise e
         raise HTTPException(status_code=400, detail="Malformed voucher authorization format")
 
-    channel_id = voucher.get("channel_id", 101)
-    cumulative_amount = voucher.get("cumulative_amount", 0)
+    channel_id = int(voucher.get("channel_id", 101))
+    cumulative_amount = int(voucher.get("cumulative_amount", 0))
 
+    # Cryptographic Ed25519 verification
     try:
         vk_bytes = bytes.fromhex(agent_pubkey_hex) if len(agent_pubkey_hex) == 64 else base64.b64decode(agent_pubkey_hex)
         verify_key = VerifyKey(vk_bytes)
@@ -101,13 +122,15 @@ async def proxy_completion(request: Request):
     except Exception:
         raise HTTPException(status_code=403, detail="Invalid cryptographic signature on voucher")
 
-    prev_state = CHANNEL_STATE.get(channel_id, {"highest_amount": 0})
+    prev_state = CHANNEL_STATE.get(channel_id, {"highest_amount": 0, "settled": False, "settled_tx": None})
+    
+    # Disallow streaming into an already settled channel until reset
+    if prev_state.get("settled", False):
+        raise HTTPException(status_code=400, detail=f"Channel #{channel_id} has been settled on-chain. Reset channel to reopen.")
+
+    # Enforce monotonic constraint
     if cumulative_amount < prev_state["highest_amount"]:
         raise HTTPException(status_code=400, detail="Non-monotonic payment voucher")
-
-    # Retain settled flags if channel already exists
-    was_settled = prev_state.get("settled", False)
-    settled_tx = prev_state.get("settled_tx", None)
 
     CHANNEL_STATE[channel_id] = {
         "channel_id": channel_id,
@@ -115,8 +138,9 @@ async def proxy_completion(request: Request):
         "signature_hex": sig_bytes.hex(),
         "agent": agent_pubkey_hex,
         "latest_voucher": voucher,
-        "settled": was_settled,
-        "settled_tx": settled_tx,
+        "settled": False,
+        "settled_tx": None,
+        "updated_at": time.time()
     }
 
     return {
@@ -161,12 +185,21 @@ def trigger_settle_endpoint(channel_id: int):
             detail=f"Channel #{channel_id} has no active vouchers to settle.",
         )
 
+    if state.get("settled", False) and state.get("settled_tx"):
+        return {
+            "status": "already_settled",
+            "channel_id": channel_id,
+            "settled_amount": state["highest_amount"],
+            "tx_hash": state["settled_tx"],
+        }
+
     try:
         payer = get_payer_keypair()
         cumulative_units = state["highest_amount"]
-        settle_lamports = max(int(cumulative_units), 1000)
+        # Convert micro-units to lamports (1 unit = 100 lamports for demo pacing)
+        settle_lamports = max(int(cumulative_units * 100), 5000)
 
-        # 1. Fetch blockhash with confirmed commitment
+        # 1. Fetch fresh blockhash with confirmed commitment
         blockhash_info = solana_rpc_call(
             "getLatestBlockhash", 
             [{"commitment": "confirmed"}]
@@ -201,7 +234,7 @@ def trigger_settle_endpoint(channel_id: int):
             ],
         )
 
-        # 5. Wait for cluster confirmation
+        # 5. Await block inclusion
         for _ in range(15):
             time.sleep(1)
             status_resp = solana_rpc_call(
