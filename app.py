@@ -106,30 +106,13 @@ def fetch_channel_data(c_id: int):
     return None
 
 
-def fetch_all_channels():
-    try:
-        res = httpx.get(f"{PROXY_URL}/channels", timeout=3.0)
-        if res.status_code == 200:
-            val = res.json()
-            if isinstance(val, list) and len(val) > 0:
-                return val
-    except Exception:
-        pass
-    return [101]
-
-
 # Sidebar Controls
-st.sidebar.markdown("### 01 // CHANNEL SELECTOR")
+st.sidebar.markdown("### 01 // CONTROL PANEL")
 
-known_channels = fetch_all_channels()
-mode = st.sidebar.radio("MODE", ["Active Channels", "Create New Channel"])
+# Hardcoded initial default 101, but allows any positive integer channel ID
+channel_id = st.sidebar.number_input("TARGET CHANNEL ID", min_value=1, value=101, step=1)
 
-if mode == "Active Channels":
-    channel_id = st.sidebar.selectbox("TARGET CHANNEL ID", options=known_channels)
-else:
-    channel_id = st.sidebar.number_input("NEW CHANNEL ID", min_value=1, value=max(known_channels) + 1, step=1)
-
-# Ensure Agent is cleanly mapped to the selected Channel ID
+# Dynamically instantiate agent for the targeted channel ID
 if "active_channel_id" not in st.session_state or st.session_state.active_channel_id != channel_id:
     st.session_state.active_channel_id = channel_id
     st.session_state.agent_sim = EmbeddedAgent(PROXY_URL, channel_id)
@@ -137,7 +120,7 @@ if "active_channel_id" not in st.session_state or st.session_state.active_channe
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 02 // STREAM CONFIG")
-auto_stream = st.sidebar.toggle("ENABLE CONTINUOUS STREAM", value=False)
+auto_stream = st.sidebar.toggle("ENABLE CONTINUOUS STREAM", value=True)
 stream_step = st.sidebar.select_slider("STEP SIZE (μ-UNITS)", options=[10, 20, 50, 100, 250, 500], value=20)
 poll_freq = st.sidebar.slider("STREAM INTERVAL (SEC)", min_value=1, max_value=5, value=2)
 
@@ -148,7 +131,7 @@ st.sidebar.markdown("""
 **PROTOCOL:** MONOTONIC VOUCHER STATE  
 """)
 
-# Load Backend State
+# Load Backend State defensively
 data = fetch_channel_data(channel_id)
 current_amt = data.get("highest_amount", 0) if isinstance(data, dict) else 0
 is_settled = data.get("settled", False) if isinstance(data, dict) else False
@@ -177,7 +160,7 @@ if isinstance(data, dict) and data.get("highest_amount", 0) > 0:
         st.markdown(f"""
         <div class="nb-card nb-cyan">
             <span class="nb-tag">Channel Status</span>
-            <div class="nb-metric-num">#{channel_id}</div>
+            <div class="nb-metric-num">ACTIVE #{channel_id}</div>
             <div>{html.escape(status_label)}</div>
         </div>
         """, unsafe_allow_html=True)
@@ -198,7 +181,7 @@ if isinstance(data, dict) and data.get("highest_amount", 0) > 0:
         </div>
         """, unsafe_allow_html=True)
 
-    # Manual Control Bar & Inspection
+    # Manual Control Bar
     st.markdown("### 02 // MANUAL MICRO-PAYMENT DISPATCH")
     m1, m2, m3, m4 = st.columns([1, 1, 1, 1.5])
     with m1:
@@ -239,7 +222,6 @@ if isinstance(data, dict) and data.get("highest_amount", 0) > 0:
         if not is_settled:
             if st.button("⚡ EXECUTE DEVNET SETTLEMENT NOW"):
                 with st.spinner("Flushing in-flight vouchers & broadcasting atomic close..."):
-                    # Cooldown buffer to give in-flight transactions time to land cleanly
                     time.sleep(1.5)
                     try:
                         res = httpx.post(f"{PROXY_URL}/channel/{channel_id}/settle", timeout=30.0)
@@ -283,7 +265,6 @@ if isinstance(data, dict) and data.get("highest_amount", 0) > 0:
         st.markdown(pda_card_html, unsafe_allow_html=True)
 
 else:
-    # Empty / Uninitialized State
     with c1:
         st.markdown(f"""
         <div class="nb-card nb-pink">
@@ -309,11 +290,11 @@ else:
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("""
+    st.markdown(f"""
     <div class="nb-card nb-white">
         <span class="nb-tag">GETTING STARTED</span>
         <div style="margin-top: 0.5rem; font-weight: 700;">
-            Channel is empty. Use the sidebar to toggle <b>ENABLE CONTINUOUS STREAM</b> or dispatch micro-payments below to start accumulating verified vouchers.
+            Channel #{channel_id} is initialized. Toggle <b>ENABLE CONTINUOUS STREAM</b> or click below to dispatch initial micro-payments.
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -322,7 +303,6 @@ else:
         st.session_state.agent_sim.trigger_micro_payment(current_total=0, step=20)
         st.rerun()
 
-# Rerun timer when auto-streaming is enabled
 if auto_stream and not is_settled:
     time.sleep(poll_freq)
     st.rerun()

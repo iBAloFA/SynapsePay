@@ -22,8 +22,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory channel store (maps channel_id -> channel ledger)
-CHANNEL_STATE = {}
+# Initialize with hardcoded default channel 101
+CHANNEL_STATE = {
+    101: {
+        "channel_id": 101,
+        "highest_amount": 0,
+        "agent": "Awaiting first voucher",
+        "signature_hex": "0" * 64,
+        "settled": False,
+        "settled_tx": None,
+        "latest_voucher": {
+            "channel_id": 101,
+            "cumulative_amount": 0,
+            "status": "ready",
+        },
+    }
+}
+
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.devnet.solana.com")
 
 
@@ -61,13 +76,12 @@ def healthz():
 
 @app.get("/channels")
 def list_active_channels():
-    # Return all active/known channels. Defaults to [101] if none yet registered
-    return sorted(list(CHANNEL_STATE.keys())) if CHANNEL_STATE else [101]
+    # Returns all active channel IDs, always including 101
+    return sorted(list(CHANNEL_STATE.keys()))
 
 
 @app.post("/channel/{channel_id}/reset")
 def reset_channel(channel_id: int):
-    # Cleanses state to allow opening a fresh cycle on the same ID
     CHANNEL_STATE[channel_id] = {
         "channel_id": channel_id,
         "highest_amount": 0,
@@ -78,8 +92,8 @@ def reset_channel(channel_id: int):
         "latest_voucher": {
             "channel_id": channel_id,
             "cumulative_amount": 0,
-            "status": "ready"
-        }
+            "status": "ready",
+        },
     }
     return {"status": "reset", "channel_id": channel_id}
 
@@ -114,7 +128,6 @@ async def proxy_completion(request: Request):
     channel_id = int(voucher.get("channel_id", 101))
     cumulative_amount = int(voucher.get("cumulative_amount", 0))
 
-    # Cryptographic Ed25519 verification
     try:
         vk_bytes = bytes.fromhex(agent_pubkey_hex) if len(agent_pubkey_hex) == 64 else base64.b64decode(agent_pubkey_hex)
         verify_key = VerifyKey(vk_bytes)
@@ -123,13 +136,11 @@ async def proxy_completion(request: Request):
         raise HTTPException(status_code=403, detail="Invalid cryptographic signature on voucher")
 
     prev_state = CHANNEL_STATE.get(channel_id, {"highest_amount": 0, "settled": False, "settled_tx": None})
-    
-    # Disallow streaming into an already settled channel until reset
+
     if prev_state.get("settled", False):
         raise HTTPException(status_code=400, detail=f"Channel #{channel_id} has been settled on-chain. Reset channel to reopen.")
 
-    # Enforce monotonic constraint
-    if cumulative_amount < prev_state["highest_amount"]:
+    if cumulative_amount < prev_state.get("highest_amount", 0):
         raise HTTPException(status_code=400, detail="Non-monotonic payment voucher")
 
     CHANNEL_STATE[channel_id] = {
@@ -140,7 +151,7 @@ async def proxy_completion(request: Request):
         "latest_voucher": voucher,
         "settled": False,
         "settled_tx": None,
-        "updated_at": time.time()
+        "updated_at": time.time(),
     }
 
     return {
@@ -196,17 +207,14 @@ def trigger_settle_endpoint(channel_id: int):
     try:
         payer = get_payer_keypair()
         cumulative_units = state["highest_amount"]
-        # Convert micro-units to lamports (1 unit = 100 lamports for demo pacing)
         settle_lamports = max(int(cumulative_units * 100), 5000)
 
-        # 1. Fetch fresh blockhash with confirmed commitment
         blockhash_info = solana_rpc_call(
             "getLatestBlockhash", 
             [{"commitment": "confirmed"}]
         )
         recent_blockhash = Hash.from_string(blockhash_info["value"]["blockhash"])
 
-        # 2. Build on-chain transfer instruction
         ix = transfer(
             TransferParams(
                 from_pubkey=payer.pubkey(),
@@ -215,11 +223,9 @@ def trigger_settle_endpoint(channel_id: int):
             )
         )
 
-        # 3. Construct and sign
         msg = Message([ix], payer.pubkey())
         tx = Transaction([payer], msg, recent_blockhash)
 
-        # 4. Broadcast with preflight verification
         tx_bytes = bytes(tx)
         tx_b64 = base64.b64encode(tx_bytes).decode("utf-8")
         real_tx_sig = solana_rpc_call(
@@ -234,7 +240,6 @@ def trigger_settle_endpoint(channel_id: int):
             ],
         )
 
-        # 5. Await block inclusion
         for _ in range(15):
             time.sleep(1)
             status_resp = solana_rpc_call(
